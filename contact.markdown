@@ -2,5 +2,5 @@
 title: Contact
 ---
 
-I live in a small hut in the mountains of Kumano Kodō on Kii Hantō and would not
-like to be contacted.
+You can reach me by email at tinkerthaler _{x{at}x}_ gmail _{x{dot}x}_ com
+
