@@ -2,5 +2,5 @@ tmp
 *.o
 *.hi
 site
-_site
+#_site
 _cache

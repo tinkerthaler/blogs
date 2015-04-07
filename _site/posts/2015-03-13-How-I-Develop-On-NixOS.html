@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>Tinkerthaler - How I Develop On NixOS</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+    </head>
+    <body>
+        <div id="header">
+            <div id="logo">
+                <a href="../">My Hakyll Blog</a>
+            </div>
+            <div id="navigation">
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../contact.html">Contact</a>
+                <a href="../archive.html">Archive</a>
+            </div>
+        </div>
+
+        <div id="content">
+            <h1>How I Develop On NixOS</h1>
+
+            <div class="info">
+    Posted on March 13, 2015
+    
+</div>
+
+<p>This post covers how I approach haskell development on my NixOS (virtual) machine.</p>
+<p>First check out this post which inspired me initially to switch to NixOS: <a href="https://ocharles.org.uk/blog/posts/2014-02-04-how-i-develop-with-nixos.html">How I Develop with Nix by Olivier Charles</a></p>
+<p>Let’s start immediately by an example. I come across some haskell code repository, e.g. <a href="https://github.com/philopon/types-compat">types-compat</a>.</p>
+<p>I have a folder in my home directory called <em>projects</em>. Here is the sample structure</p>
+<pre><code>|- /home/&lt;myuser&gt;
+  |- projects
+    |- libraries
+      |- haskell
+    |- someProjectOfMine</code></pre>
+<p>So I checkout external sources inside <code>~/projects/libraries/haskell</code></p>
+<pre><code>cd ~/projects/libraries/haskell
+git clone https://github.com/philopon/types-compat
+cd types-compat</code></pre>
+<p>I forgot to say that in my <em>default</em> NixOS environment I try to keep it to a minimum so I don’t have ghci available:</p>
+<pre><code>[me@mymachine:~/projects/libraries/haskell/types-compat]$ ghci
+ghci: command not found</code></pre>
+<p>As you’ll see - if you read on - we’re only a few lines away of having not only ghci but all the necessary dependencies at our fingertips! There are a few things to be setup only once. I’ll mark them as <em>prerequisite</em> so you can see that the second (and third and fourth) time should really set you up quickly</p>
+<p>So I want to have a nix-shell for this haskell library. First of all the cabal2nix utility has to be installed:</p>
+<p>(<em>prerequisite:</em>)</p>
+<pre><code>nix-env -i cabal2nix</code></pre>
+<p>Then I run it on the types-compat project:</p>
+<pre><code># (still in ~/projects/libraries/haskell/types-compat)
+cabal2nix . &gt; types-compat.nix</code></pre>
+<p>There is some naming convention here. First of all types-compat nicely follows the standard naming for a repository and the output nix file should be named <project_name>.nix</p>
+<p>Then I have bash function which I added to my .bashrc which looks like this:</p>
+<p>(<em>prerequisite:</em>)</p>
+<pre><code>vi ~/.bashrc</code></pre>
+<p>Add this function called mk_nix_shell_std. It actually serves two purposes:</p>
+<ul>
+<li>first of all: when I have an empty folder (a new project) I run the mk_nix_shell_std script and it will create my nix files.</li>
+<li>secondly: as we are demonstrating in this post I use it to generate a shell.nix wrapper around an existing <project_name>.nix file so that I don’t have to touch the generated nix file (and can thus regenerate as much as I want)</li>
+</ul>
+<p>Some notes:</p>
+<ul>
+<li>The script is based on someone else’s work (but I don’t remember who. When I find out from whom I tweaked it I’ll provide a link to the post)</li>
+<li>There is some <em>rubbish</em> in the script (e.g. it sets a python dependency, a useless environment variable). It’s for sample purposes (and my brain is rather limited so I like to keep them). Tweak it as you like.</li>
+</ul>
+<p>You can find the script source at the bottom of this post to save some space here.</p>
+<p>After you added it to <code>.bashrc</code> first run the following command to ensure it’s loaded:</p>
+<p>(<em>prerequisite:</em>)</p>
+<pre><code>. ~/.bashrc</code></pre>
+<p>Now - assuming you are still in <code>~/projects/libraries/haskell/types-compat</code> - you can run it:</p>
+<pre><code>mk_nix_shell_std</code></pre>
+<p>It generates a shell.nix similar to the template above. Note that the name is properly filled and that the types-compat.nix is loaded as a haskell extension package:</p>
+<pre><code>haskellPackages = pkgs.haskellPackages.override {
+    extension = self: super: {
+      types-compat = self.callPackage ./types-compat.nix {};
+    };
+};</code></pre>
+<p>Simply run</p>
+<pre><code>nix-shell</code></pre>
+<p>and you’re good to go:</p>
+<pre><code>ghci 
+:l src/Data/Proxy/Compat.hs</code></pre>
+<p>Pretty neat, no?</p>
+<p>Actually it doesn’t always work this easy. For example the package <a href="https://github.com/philopon/bytestring-read">bytestring-read</a> from the same author depends on types-compat. When we’d follow the above steps we’d run into:</p>
+<pre><code>$ nix-shell
+error: anonymous function at &quot;/home/me/projects/libraries/haskell/bytestring-read/bytestring-read.nix&quot;:3:1 called without required argument ‘typesCompat’, at &quot;/nix/store/v0a5yjygwv6gq40664ik71c6nc3cm0cn-nixpkgs-15.05pre55774.b6f8d1f/nixpkgs/lib/customisation.nix&quot;:58:12
+(use ‘--show-trace’ to show detailed location information)</code></pre>
+<p>That’s because nix-shell can resolve haskell packages that are in the haskellPackages of nixpks but it cannot resolve the ones that aren’t.</p>
+<p>So we need to tell our shell.nix script where it can find it. Basically we’ll do the following (recursive) steps</p>
+<ul>
+<li>Locate the source</li>
+<li>Clone the source in the ~/projects/libraries/haskell folder</li>
+<li>Apply the procedure above (<code>cabal2nix</code> and <code>mk_nix_shell_std</code>)</li>
+<li>Test it by running <code>nix-shell</code></li>
+<li>Recurse for other dependencies if needed</li>
+</ul>
+<p>In the bytestring-read example the missing dependency is types-compat (the one I explained above). So because we already have it installed we can just update our shell.nix:</p>
+<pre><code>vi shell.nix</code></pre>
+<p>Add the following line in the extension part (above bytestring-read):</p>
+<pre><code>typesCompat = self.callPackage ../types-compat/types-compat.nix {};</code></pre>
+<p>So it looks like this</p>
+<pre><code>...
+haskellPackages = pkgs.haskellPackages.override {
+    extension = self: super: {
+        typesCompat = self.callPackage ../types-compat/types-compat.nix {};
+        bytestring-read = self.callPackage ./bytestring-read.nix {};
+    };
+};
+  ...</code></pre>
+<p>Careful readers will notice an inconsitency in the names. And it’s in fact a bug I need to fix some day.</p>
+<p>The typesCompat in the extensions is the correct naming convention and the bytestring-read is not correct (should have been bytestringRead).</p>
+<p>We do need to use typesCompat and not types-compat because the cabal2nix-generated bytestring-read.nix has the following dependencies:</p>
+<pre><code>{ cabal, doctest, tasty, tastyQuickcheck, typesCompat }:</code></pre>
+<p>Notice typesCompat there!</p>
+<p>I started this post by saying that this is how <em>I</em> do it but I’m actually really curious as to how other nixers do it. How do you bootstrap your own projects? Which are the dependencies that you <em>always</em> include?</p>
+<p>That and any other suggestions are more than welcome.</p>
+<p>So here is the script:</p>
+<p>(<em>prerequisite:</em>)</p>
+<pre><code># Stdenv
+mk_nix_shell_std() {
+  loc=`pwd`
+  name=`basename ${loc}`
+
+  if [ ! -f &quot;${name}.nix&quot; ]; then
+    echo &quot;${name}.nix is not found. Create bare minimum version...&quot;
+    cat &lt;&lt;EOM &gt; ${name}.nix
+# Template file!
+{ cabal }:
+
+cabal.mkDerivation (self: {
+  pname = &quot;${name}&quot;;
+  version = &quot;0.1.0.0&quot;;
+  src = ./.;
+  buildDepends = [];
+  meta = {
+    license = self.stdenv.lib.licences.unfree;
+    platforms = self.ghc.meta.platforms;
+  };
+})
+EOM
+  else
+    echo &quot;${name}.nix is found&quot;
+  fi
+
+  cat &lt;&lt;EOM &gt; shell.nix
+let
+  pkgs = import &lt;nixpkgs&gt; {};
+  haskellPackages = pkgs.haskellPackages.override {
+    extension = self: super: {
+      ${name} = self.callPackage ./${name}.nix {};
+    };
+  };
+  name = &quot;${name}&quot;;
+  stdenv = pkgs.stdenv;
+in stdenv.mkDerivation {
+  buildInputs = [
+    (haskellPackages.ghcWithPackagesOld (hs: ([
+      hs.cabalInstall
+      hs.hscolour
+      hs.hoogle
+      hs.haddock
+    ]
+    ++ hs.${name}.propagatedNativeBuildInputs
+    )))
+    pkgs.python
+    pkgs.libxml2
+    pkgs.postgresql
+  ];
+  inherit name;
+  ME_ENV = &quot;Hello&quot;;
+}
+EOM
+}</code></pre>
+<p>-<em>T</em>-</p>
+
+        </div>
+        <div id="footer">
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </div>
+    </body>
+</html>
